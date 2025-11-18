@@ -2,9 +2,19 @@
 session_start();
 header('Content-Type: application/json');
 
-// Kiểm tra quyền admin
+// Debug log function
+function debugLog($message) {
+    error_log("[Admin Actions Debug] " . $message);
+}
+
+// Kiểm tra quyền adminn
 if (!isset($_SESSION['is_logged_in']) || !$_SESSION['is_logged_in'] || !isset($_SESSION['is_admin']) || !$_SESSION['is_admin']) {
     echo json_encode(['success' => false, 'message' => 'Không có quyền truy cập']);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(['success' => false, 'message' => 'Phương thức không được phép']);
     exit;
 }
 
@@ -18,167 +28,154 @@ try {
     $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
+    // Debug: Log received data
+    debugLog("Received POST data: " . print_r($_POST, true));
+    
     $action = $_POST['action'] ?? '';
-    $type = $_POST['type'] ?? 'all'; // 'all', 'discussion', 'listing'
+    debugLog("Action: $action");
     
-    // Log để debug
-    error_log("Admin action: $action, type: $type");
+    // Handle bulk actions first
+    if ($action === 'approve_selected') {
+        $post_ids_json = $_POST['post_ids'] ?? '';
+        debugLog("Bulk action - post_ids: $post_ids_json");
+        
+        $post_ids = json_decode($post_ids_json, true);
+        
+        if (empty($post_ids) || !is_array($post_ids)) {
+            echo json_encode(['success' => false, 'message' => 'Không có bài đăng nào được chọn']);
+            exit;
+        }
+        
+        // Sanitize IDs
+        $post_ids = array_map('intval', $post_ids);
+        $post_ids = array_filter($post_ids, function($id) { return $id > 0; });
+        
+        if (empty($post_ids)) {
+            echo json_encode(['success' => false, 'message' => 'ID bài đăng không hợp lệ']);
+            exit;
+        }
+        
+        debugLog("Validated post IDs: " . implode(', ', $post_ids));
+        
+        // Execute bulk approve
+        try {
+            $placeholders = str_repeat('?,', count($post_ids) - 1) . '?';
+            $stmt = $pdo->prepare("UPDATE posts SET status = 'active' WHERE post_id IN ($placeholders)");
+            $result = $stmt->execute($post_ids);
+            
+            if ($result) {
+                $count = count($post_ids);
+                debugLog("Bulk approve successful - $count posts updated");
+                echo json_encode(['success' => true, 'message' => "Đã duyệt $count bài đăng thành công"]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Có lỗi xảy ra khi duyệt các bài đăng']);
+            }
+        } catch (Exception $e) {
+            debugLog("Bulk approve error: " . $e->getMessage());
+            echo json_encode(['success' => false, 'message' => 'Lỗi khi duyệt hàng loạt: ' . $e->getMessage()]);
+        }
+        exit;
+    }
     
+    // Handle single post actions
+    $post_id = $_POST['post_id'] ?? '';
+    debugLog("Single action - Post ID raw: $post_id");
+    
+    if (empty($post_id)) {
+        echo json_encode(['success' => false, 'message' => 'Không có ID bài đăng']);
+        exit;
+    }
+    
+    $post_id = intval($post_id);
+    
+    if ($post_id <= 0) {
+        echo json_encode(['success' => false, 'message' => "ID bài đăng không hợp lệ: $post_id"]);
+        exit;
+    }
+    
+    debugLog("Validated Post ID: $post_id");
+    
+    // Kiểm tra xem bài đăng có tồn tại không
+    $check_stmt = $pdo->prepare("SELECT post_id, status FROM posts WHERE post_id = ?");
+    $check_stmt->execute([$post_id]);
+    $existing_post = $check_stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$existing_post) {
+        echo json_encode(['success' => false, 'message' => "Không tìm thấy bài đăng với ID: $post_id"]);
+        exit;
+    }
+    
+    debugLog("Found post: " . print_r($existing_post, true));
+    
+    // Execute single post actions
     switch ($action) {
         case 'approve':
-            $post_id = $_POST['post_id'] ?? 0;
+            $stmt = $pdo->prepare("UPDATE posts SET status = 'active' WHERE post_id = ?");
+            $result = $stmt->execute([$post_id]);
             
-            if ($type === 'discussion') {
-                // Duyệt bài thảo luận từ forum_topics
-                $stmt = $pdo->prepare("UPDATE forum_topics SET status = 'active' WHERE topic_id = ?");
-                $stmt->execute([$post_id]);
-                
-                if ($stmt->rowCount() > 0) {
-                    echo json_encode(['success' => true, 'message' => 'Đã duyệt bài thảo luận']);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Không tìm thấy bài thảo luận']);
-                }
+            debugLog("Approve result: " . ($result ? 'success' : 'failed'));
+            
+            if ($result) {
+                echo json_encode(['success' => true, 'message' => "Đã duyệt bài đăng #$post_id thành công"]);
             } else {
-                // Duyệt bài đăng từ posts
-                $stmt = $pdo->prepare("UPDATE posts SET status = 'active' WHERE post_id = ?");
-                $stmt->execute([$post_id]);
-                
-                if ($stmt->rowCount() > 0) {
-                    echo json_encode(['success' => true, 'message' => 'Đã duyệt bài đăng']);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Không tìm thấy bài đăng']);
-                }
+                echo json_encode(['success' => false, 'message' => 'Có lỗi xảy ra khi duyệt bài đăng']);
             }
             break;
             
         case 'reject':
-            $post_id = $_POST['post_id'] ?? 0;
+            $stmt = $pdo->prepare("UPDATE posts SET status = 'rejected' WHERE post_id = ?");
+            $result = $stmt->execute([$post_id]);
             
-            if ($type === 'discussion') {
-                // Từ chối bài thảo luận từ forum_topics
-                $stmt = $pdo->prepare("UPDATE forum_topics SET status = 'rejected' WHERE topic_id = ?");
-                $stmt->execute([$post_id]);
-                
-                if ($stmt->rowCount() > 0) {
-                    echo json_encode(['success' => true, 'message' => 'Đã từ chối bài thảo luận']);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Không tìm thấy bài thảo luận']);
-                }
+            debugLog("Reject result: " . ($result ? 'success' : 'failed'));
+            
+            if ($result) {
+                echo json_encode(['success' => true, 'message' => "Đã từ chối bài đăng #$post_id"]);
             } else {
-                // Từ chối bài đăng từ posts
-                $stmt = $pdo->prepare("UPDATE posts SET status = 'rejected' WHERE post_id = ?");
-                $stmt->execute([$post_id]);
-                
-                if ($stmt->rowCount() > 0) {
-                    echo json_encode(['success' => true, 'message' => 'Đã từ chối bài đăng']);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Không tìm thấy bài đăng']);
-                }
+                echo json_encode(['success' => false, 'message' => 'Có lỗi xảy ra khi từ chối bài đăng']);
             }
             break;
             
         case 'delete':
-            $post_id = $_POST['post_id'] ?? 0;
+            // Xóa hình ảnh liên quan trước
+            $stmt = $pdo->prepare("SELECT images FROM posts WHERE post_id = ?");
+            $stmt->execute([$post_id]);
+            $post = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if ($type === 'discussion') {
-                // Xóa bài thảo luận từ forum_topics
-                $stmt = $pdo->prepare("DELETE FROM forum_topics WHERE topic_id = ?");
-                $stmt->execute([$post_id]);
-                
-                if ($stmt->rowCount() > 0) {
-                    echo json_encode(['success' => true, 'message' => 'Đã xóa bài thảo luận']);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Không tìm thấy bài thảo luận']);
-                }
-            } else {
-                // Xóa bài đăng từ posts
-                $stmt = $pdo->prepare("DELETE FROM posts WHERE post_id = ?");
-                $stmt->execute([$post_id]);
-                
-                if ($stmt->rowCount() > 0) {
-                    echo json_encode(['success' => true, 'message' => 'Đã xóa bài đăng']);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Không tìm thấy bài đăng']);
+            if ($post && !empty($post['images'])) {
+                $images = json_decode($post['images'], true);
+                if (is_array($images)) {
+                    foreach ($images as $image) {
+                        if (file_exists($image)) {
+                            unlink($image);
+                            debugLog("Deleted image: $image");
+                        }
+                    }
                 }
             }
-            break;
             
-        case 'approve_selected':
-            $post_ids = json_decode($_POST['post_ids'] ?? '[]', true);
+            // Xóa bài đăng
+            $stmt = $pdo->prepare("DELETE FROM posts WHERE post_id = ?");
+            $result = $stmt->execute([$post_id]);
             
-            if (empty($post_ids)) {
-                echo json_encode(['success' => false, 'message' => 'Không có bài đăng nào được chọn']);
-                break;
-            }
+            debugLog("Delete result: " . ($result ? 'success' : 'failed'));
             
-            $placeholders = str_repeat('?,', count($post_ids) - 1) . '?';
-            
-            if ($type === 'discussion') {
-                // Duyệt nhiều bài thảo luận
-                $stmt = $pdo->prepare("UPDATE forum_topics SET status = 'active' WHERE topic_id IN ($placeholders)");
-                $stmt->execute($post_ids);
-                
-                $count = $stmt->rowCount();
-                echo json_encode(['success' => true, 'message' => "Đã duyệt $count bài thảo luận"]);
+            if ($result) {
+                echo json_encode(['success' => true, 'message' => "Đã xóa bài đăng #$post_id thành công"]);
             } else {
-                // Duyệt nhiều bài đăng
-                $stmt = $pdo->prepare("UPDATE posts SET status = 'active' WHERE post_id IN ($placeholders)");
-                $stmt->execute($post_ids);
-                
-                $count = $stmt->rowCount();
-                echo json_encode(['success' => true, 'message' => "Đã duyệt $count bài đăng"]);
-            }
-            break;
-            
-        case 'toggle_user_status':
-            $user_id = $_POST['user_id'] ?? 0;
-            
-            // Kiểm tra trạng thái hiện tại
-            $stmt = $pdo->prepare("SELECT is_active FROM users WHERE user_id = ?");
-            $stmt->execute([$user_id]);
-            $user = $stmt->fetch();
-            
-            if ($user) {
-                $new_status = $user['is_active'] ? 0 : 1;
-                $stmt = $pdo->prepare("UPDATE users SET is_active = ? WHERE user_id = ?");
-                $stmt->execute([$new_status, $user_id]);
-                
-                $status_text = $new_status ? 'kích hoạt' : 'khóa';
-                echo json_encode(['success' => true, 'message' => "Đã $status_text tài khoản người dùng"]);
-            } else {
-                echo json_encode(['success' => false, 'message' => 'Không tìm thấy người dùng']);
-            }
-            break;
-            
-        case 'delete_user':
-            $user_id = $_POST['user_id'] ?? 0;
-            
-            // Kiểm tra không phải admin
-            $stmt = $pdo->prepare("SELECT is_admin FROM users WHERE user_id = ?");
-            $stmt->execute([$user_id]);
-            $user = $stmt->fetch();
-            
-            if ($user && !$user['is_admin']) {
-                $stmt = $pdo->prepare("DELETE FROM users WHERE user_id = ?");
-                $stmt->execute([$user_id]);
-                
-                if ($stmt->rowCount() > 0) {
-                    echo json_encode(['success' => true, 'message' => 'Đã xóa tài khoản người dùng']);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Không thể xóa tài khoản']);
-                }
-            } else {
-                echo json_encode(['success' => false, 'message' => 'Không thể xóa tài khoản admin']);
+                echo json_encode(['success' => false, 'message' => 'Có lỗi xảy ra khi xóa bài đăng']);
             }
             break;
             
         default:
-            echo json_encode(['success' => false, 'message' => 'Hành động không hợp lệ']);
+            echo json_encode(['success' => false, 'message' => "Hành động không hợp lệ: $action"]);
             break;
     }
     
 } catch(PDOException $e) {
-    error_log("Database error in admin_actions.php: " . $e->getMessage());
+    debugLog("Database error: " . $e->getMessage());
     echo json_encode(['success' => false, 'message' => 'Lỗi database: ' . $e->getMessage()]);
+} catch(Exception $e) {
+    debugLog("General error: " . $e->getMessage());
+    echo json_encode(['success' => false, 'message' => 'Lỗi: ' . $e->getMessage()]);
 }
 ?>

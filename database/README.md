@@ -636,7 +636,7 @@ electroreview/
 
 ### Bước 2: Clone/Download Project
 ```bash
-# Clone từ repository (nếu có)
+# Clone từ repository 
 git clone https://github.com/nghiemthihuyentrang/NH-M-4---DEHA.git
 
 # Hoặc download và giải nén file ZIP

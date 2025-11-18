@@ -8,12 +8,6 @@ if (!isset($_SESSION['is_logged_in']) || !$_SESSION['is_logged_in']) {
     exit;
 }
 
-// Kiểm tra user_id có tồn tại trong session không
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
-    echo json_encode(['success' => false, 'message' => 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại!']);
-    exit;
-}
-
 // Kết nối database
 $host = 'localhost';
 $dbname = 'electroreview_db';
@@ -62,10 +56,12 @@ try {
             }
         } else {
             $category_id = null;
-        }        // Insert bài thảo luận vào database với status 'active' để hiển thị ngay
+        }
+        
+        // Insert bài thảo luận vào database
         $stmt = $pdo->prepare("
-            INSERT INTO forum_topics (user_id, title, content, category_id, status, tags, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, 'active', ?, NOW(), NOW())
+            INSERT INTO posts (user_id, title, content, post_type, category_id, status, tags, created_at, updated_at) 
+            VALUES (?, ?, ?, 'discussion', ?, 'pending', ?, NOW(), NOW())
         ");
         
         $result = $stmt->execute([
@@ -77,12 +73,12 @@ try {
         ]);
         
         if ($result) {
-            $topic_id = $pdo->lastInsertId();
+            $post_id = $pdo->lastInsertId();
             
             echo json_encode([
                 'success' => true, 
-                'message' => 'Bài thảo luận đã được đăng thành công! Bạn có thể xem bài viết ngay trên trang thảo luận.',
-                'topic_id' => $topic_id
+                'message' => 'Bài thảo luận đã được tạo thành công và đang chờ admin duyệt!',
+                'post_id' => $post_id
             ]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Có lỗi xảy ra khi tạo bài thảo luận!']);
