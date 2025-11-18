@@ -52,16 +52,16 @@ try {
             $category_check = $pdo->prepare("SELECT category_id FROM categories WHERE category_id = ?");
             $category_check->execute([$category_id]);
             if (!$category_check->fetch()) {
-                $category_id = null; // Set null nếu category không tồn tại
+                $category_id = null;
             }
         } else {
             $category_id = null;
         }
         
-        // Insert bài thảo luận vào database
+        // ✅ SỬA TẠI ĐÂY: Insert vào bảng forum_topics thay vì posts
         $stmt = $pdo->prepare("
-            INSERT INTO posts (user_id, title, content, post_type, category_id, status, tags, created_at, updated_at) 
-            VALUES (?, ?, ?, 'discussion', ?, 'pending', ?, NOW(), NOW())
+            INSERT INTO forum_topics (user_id, title, content, category_id, status, tags, created_at, updated_at) 
+            VALUES (?, ?, ?, ?, 'pending', ?, NOW(), NOW())
         ");
         
         $result = $stmt->execute([
@@ -73,12 +73,12 @@ try {
         ]);
         
         if ($result) {
-            $post_id = $pdo->lastInsertId();
+            $topic_id = $pdo->lastInsertId();
             
             echo json_encode([
                 'success' => true, 
                 'message' => 'Bài thảo luận đã được tạo thành công và đang chờ admin duyệt!',
-                'post_id' => $post_id
+                'topic_id' => $topic_id
             ]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Có lỗi xảy ra khi tạo bài thảo luận!']);
